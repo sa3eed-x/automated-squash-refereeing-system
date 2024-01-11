@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Squash-Ball']
+
+roboflow:
+  workspace: grad-6qy6l
+  project: ball-tracking-swfbo
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/grad-6qy6l/ball-tracking-swfbo/dataset/3
