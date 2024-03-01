@@ -1,0 +1,61 @@
+import numpy as np 
+import pandas as pd 
+import matplotlib.pyplot as plt
+import os
+from sklearn.model_selection import train_test_split
+# from main import df
+from sklearn.preprocessing import LabelEncoder
+import pandas as pd
+
+dataset_path = os.listdir('D:/college/grad. project/normal&foul_binaryClassifier/videos/test/test')
+
+# label_types = os.listdir('D:/!1)year 4/graduation/yolo-trials/labeled videos/train')
+# print (label_types)
+print(dataset_path)
+rooms=[]
+for folder in dataset_path:
+    all_folder=os.listdir('D:/college/grad. project/normal&foul_binaryClassifier/videos/test/test'+'/'+folder)
+    for room in all_folder:
+        rooms.append((folder, str('D:/college/grad. project/normal&foul_binaryClassifier/videos/test/test' + '/' + folder) + '/' + room))
+print(rooms)
+
+# Build a dataframe
+train_df = pd.DataFrame(data=rooms, columns=['tag', 'video_name'])
+# print(train_df.head())
+# print(train_df.tail())
+
+df = train_df.loc[:,['video_name','tag']]
+df
+df.to_csv('data.csv')
+print(df)
+print("End main")
+
+df=pd.read_csv('data.csv')
+label_encoder = LabelEncoder()
+df['tag'] = label_encoder.fit_transform(df['tag'])
+# # Split the data into training, testing, and validation sets
+# train_df, test_val_df = train_test_split(df, test_size=0.3, random_state=42)
+# test_df, val_df = train_test_split(test_val_df, test_size=0.4, random_state=42)
+#
+# # Define X and y for each set
+# X_train = train_df['video_name'].tolist()
+# y_train = train_df['tag'].tolist()
+#
+# X_test = test_df['video_name'].tolist()
+# y_test = test_df['tag'].tolist()
+#
+# X_val = val_df['video_name'].tolist()
+# y_val = val_df['tag'].tolist()
+#
+# # Print the size of each set
+# print(f"Train set size: {len(X_train)}")
+# print(f"Test set size: {len(X_test)}")
+# print(f"Validation set size: {len(X_val)}")
+# print(f"Total videos for training: {len(train_df)}")
+# print(f"Total videos for testing: {len(test_df)}")
+# print(y_train)
+# Split the data into training, testing
+train_df, test_df = train_test_split(df, test_size=0.3, random_state=42)
+print(f"Total videos for training: {len(train_df)}")
+print(f"Total videos for testing: {len(test_df)}")
+print(train_df)
