@@ -1,0 +1,176 @@
+import os
+
+import cv2
+import keras
+import numpy as np
+import tensorflow as tf
+from keras import layers, models
+from keras.applications import InceptionV3, MobileNet, EfficientNetB0
+from keras.applications.inception_v3 import preprocess_input as preprocess_input_inceptionv3
+from keras.applications.mobilenet import preprocess_input as preprocess_input_mobilenet
+from keras.applications.efficientnet import preprocess_input as preprocess_input_efficientnet
+from keras.optimizers import Adam
+from keras.layers import Input
+from keras.applications import InceptionV3, MobileNet, EfficientNetB0
+
+from DataPreparation import train_df,test_df
+IMG_SIZE = 224
+
+
+def crop_center_square(frame):
+    y, x = frame.shape[0:2]
+    min_dim = min(y, x)
+    start_x = (x // 2) - (min_dim // 2)
+    start_y = (y // 2) - (min_dim // 2)
+    return frame[start_y : start_y + min_dim, start_x : start_x + min_dim]
+
+
+def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
+    cap = cv2.VideoCapture(path)
+    frames = []
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = crop_center_square(frame)
+            frame = cv2.resize(frame, resize)
+            frame = frame[:, :, [2, 1, 0]]
+            frames.append(frame)
+
+            if len(frames) == max_frames:
+                break
+    finally:
+        cap.release()
+    return np.array(frames)
+def build_feature_extractor():
+    feature_extractor = keras.applications.MobileNet(
+        weights="imagenet",
+        include_top=False,
+        pooling="avg",
+        input_shape=(IMG_SIZE, IMG_SIZE, 3),
+    )
+    preprocess_input = keras.applications.mobilenet.preprocess_input
+
+    inputs = keras.Input((IMG_SIZE, IMG_SIZE, 3))
+    preprocessed = preprocess_input(inputs)
+
+    outputs = feature_extractor(preprocessed)
+    return keras.Model(inputs, outputs, name="feature_extractor")
+
+
+feature_extractor = build_feature_extractor()
+feat_name='MobileNet'
+
+#Define hyperparameters
+
+IMG_SIZE = 224
+BATCH_SIZE = 64
+EPOCHS = 100
+
+MAX_SEQ_LENGTH = 20
+NUM_FEATURES = 1024 ######### change back to 2048 for inception model , 1024 for mobile net , 1280 for efficient net
+
+
+def prepare_all_videos(df, root_dir):
+    num_samples = len(df)
+    video_paths = df["video_name"].values.tolist()
+
+    ##take all classlabels from train_df column named 'tag' and store in labels
+    labels = df["tag"].values
+
+    # `frame_masks` and `frame_features` are what we will feed to our sequence model.
+    # `frame_masks` will contain a bunch of booleans denoting if a timestep is
+    # masked with padding or not.
+    frame_masks = np.zeros(shape=(num_samples, MAX_SEQ_LENGTH), dtype="bool")  # 145,20
+    frame_features = np.zeros(shape=(num_samples, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32")  # 145,20,2048
+
+    # For each video.
+    for idx, path in enumerate(video_paths):
+        # Gather all its frames and add a batch dimension.
+        frames = load_video(os.path.join(root_dir, path))
+        frames = frames[None, ...]
+
+        # Initialize placeholders to store the masks and features of the current video.
+        temp_frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
+        temp_frame_features = np.zeros(
+            shape=(1, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32"
+        )
+
+        # Extract features from the frames of the current video.
+        for i, batch in enumerate(frames):
+            video_length = batch.shape[0]
+            length = min(MAX_SEQ_LENGTH, video_length)
+            for j in range(length):
+                temp_frame_features[i, j, :] = feature_extractor.predict(
+                    batch[None, j, :]
+                )
+            temp_frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
+
+        frame_features[idx,] = temp_frame_features.squeeze()
+        frame_masks[idx,] = temp_frame_mask.squeeze()
+
+    return (frame_features, frame_masks), labels
+
+
+train_data, train_labels = prepare_all_videos(train_df, "train")
+test_data, test_labels = prepare_all_videos(test_df, "test")
+
+print(f"Frame features in train set: {train_data[0].shape}")
+print(f"Frame masks in train set: {train_data[1].shape}")
+
+print(f"train_labels in train set: {train_labels.shape}")
+
+print(f"test_labels in train set: {test_labels.shape}")
+
+# MAX_SEQ_LENGTH = 20, NUM_FEATURES = 2048. We have defined this above under hyper parameters
+# MAX_SEQ_LENGTH = 30 (CHANGED) #########
+
+def get_sequence_model():
+    class_vocab = ['20fouls','normal']
+
+    frame_features_input = keras.Input((MAX_SEQ_LENGTH, NUM_FEATURES))
+    mask_input = keras.Input((MAX_SEQ_LENGTH,), dtype="bool")
+
+    # Replace GRU with LSTM
+    x = keras.layers.LSTM(16, return_sequences=True)(frame_features_input, mask=mask_input)
+    x = keras.layers.LSTM(8)(x)
+    x = keras.layers.Dropout(0.4)(x)
+    # x = keras.layers.Dense(8, activation="relu")(x)
+    output = keras.layers.Dense(1, activation="sigmoid")(x)
+
+    lstm_model = keras.Model([frame_features_input, mask_input], output)
+
+    lstm_model.compile(
+        loss="binary_crossentropy", optimizer="adam", metrics=["accuracy"]
+    )
+    return lstm_model
+
+EPOCHS = 5
+# Utility for running experiments.
+def run_experiment():
+    filepath = "./tmp/video_classifier"
+    checkpoint = keras.callbacks.ModelCheckpoint(
+        filepath, save_weights_only=True, save_best_only=True, verbose=1
+    )
+
+    seq_model = get_sequence_model()
+    history = seq_model.fit(
+        [train_data[0], train_data[1]],
+        train_labels,
+        validation_split=0.2,
+        epochs=EPOCHS,
+        callbacks=[checkpoint],
+    )
+
+    seq_model.load_weights(filepath)
+    _, accuracy = seq_model.evaluate([test_data[0], test_data[1]], test_labels)
+    print(f"Test accuracy for mobile net: {round(accuracy * 100, 2)}%")
+
+    return history, seq_model
+
+
+_, sequence_model = run_experiment()
+# Save the trained model
+# sequence_model.save('D:/college\grad. project/normal&foul_binaryClassifier/videos/test/model.h5')
+# mobilenet test accuracy=53.85%
